@@ -1,13 +1,16 @@
 // mod sstable
 
-use std::io::{Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 
+use crate::MemTable;
 use crate::entry::{Entry, Seq, ValueKind};
 use crate::error::{LsmError, Result};
+use std::fs::File;
+use std::path::Path;
 
 pub fn write_record<W: Write>(writer: &mut W, key: &[u8], entry: &Entry) -> Result<()> {
     let key_len: u32 =
-        u32::try_from(key.len()).map_err(|err| LsmError::Corrupt("key out bound of u32"))?;
+        u32::try_from(key.len()).map_err(|_| LsmError::Corrupt("key out bound of u32"))?;
     let (kind, seq, value): (u8, Seq, &[u8]) = match &entry.value {
         ValueKind::Put(value) => (0, entry.seq, value.as_slice()),
         ValueKind::Tombstone => (1, entry.seq, &[]),
@@ -116,4 +119,32 @@ pub fn read_record<R: Read>(input: &mut R) -> Result<Option<(Vec<u8>, Entry)>> {
     };
 
     Ok(Some((key, entry)))
+}
+
+/*
+   write_sstable 组织好整个SST文件: 将memtable的kv先缓冲在内存中，然后一次性写入到文件上
+   write_record 做序列化
+*/
+pub fn write_sstable(path: &Path, mem: &MemTable) -> Result<()> {
+    let file = File::create(path)?;
+    let mut buffer = BufWriter::new(file);
+    for (key, value) in mem.iter() {
+        write_record(&mut buffer, key, &value)?;
+    }
+    buffer.flush()?;
+    Ok(())
+}
+
+pub fn find_in_sstable(path: &Path, key: &[u8]) -> Result<Option<Entry>> {
+    let file = File::open(path)?;
+    let mut input = BufReader::new(file);
+    while let Some((found, entry)) = read_record(&mut input)? {
+        if key == found.as_slice() {
+            return Ok(Some(entry));
+        }
+        if key < found.as_slice() {
+            return Ok(None);
+        }
+    }
+    Ok(None)
 }

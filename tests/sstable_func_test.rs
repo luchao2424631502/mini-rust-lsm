@@ -1,4 +1,8 @@
-use minilsm::{Entry, LsmError, read_record, write_record};
+use std::fs;
+
+use minilsm::{
+    Entry, LsmError, MemTable, ValueKind, find_in_sstable, read_record, write_record, write_sstable,
+};
 
 #[test]
 fn test_tombstone_round_trip() {
@@ -152,3 +156,66 @@ fn test_two_read_return_results() {
 }
 
 //
+#[test]
+fn single_file_write_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sst_000001.sst");
+
+    let mut mem = MemTable::new();
+    mem.put(b"c".to_vec(), Entry::put(1024, b"b_value"));
+    mem.put(b"a".to_vec(), Entry::tombstone(1023));
+    write_sstable(&path, &mem).unwrap();
+
+    assert_eq!(find_in_sstable(&path, b"a").unwrap().unwrap().seq, 1023);
+}
+
+#[test]
+fn single_file_write_multi_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sst_000001.sst");
+
+    let mut mem = MemTable::new();
+    mem.put(b"d".to_vec(), Entry::put(4, b"d_value"));
+    mem.put(b"b".to_vec(), Entry::tombstone(2));
+    mem.put(b"a".to_vec(), Entry::put(1, b"a_value"));
+    mem.put(b"c".to_vec(), Entry::tombstone(3));
+    write_sstable(&path, &mem).unwrap();
+
+    let mut input = fs::OpenOptions::new().read(true).open(path).unwrap();
+    let (key_a, entry_a) = read_record(&mut input).unwrap().unwrap();
+    assert_eq!(key_a, b"a".to_vec());
+    assert_eq!(entry_a.seq, 1);
+    assert_eq!(entry_a.value, ValueKind::Put(b"a_value".to_vec()));
+
+    let (key_b, entry_b) = read_record(&mut input).unwrap().unwrap();
+    assert_eq!(key_b, b"b".to_vec());
+    assert_eq!(entry_b.seq, 2);
+    assert_eq!(entry_b.value, ValueKind::Tombstone);
+
+    let (key_c, entry_c) = read_record(&mut input).unwrap().unwrap();
+    assert_eq!(key_c, b"c".to_vec());
+    assert_eq!(entry_c.seq, 3);
+    assert_eq!(entry_c.value, ValueKind::Tombstone);
+
+    let (key_d, entry_d) = read_record(&mut input).unwrap().unwrap();
+    assert_eq!(key_d, b"d".to_vec());
+    assert_eq!(entry_d.seq, 4);
+    assert_eq!(entry_d.value, ValueKind::Put(b"d_value".to_vec()));
+}
+
+#[test]
+fn none_read_in_single_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tmp.sst");
+
+    let mut mem = MemTable::new();
+    mem.put(b"1".to_vec(), Entry::put(1, b"1v"));
+    mem.put(b"9".to_vec(), Entry::put(2, b"2v"));
+    mem.put(b"124".to_vec(), Entry::tombstone(0124));
+
+    write_sstable(&path, &mem).unwrap();
+
+    let found_entry = find_in_sstable(&path, b"125").unwrap();
+
+    assert_eq!(found_entry, None);
+}

@@ -1,6 +1,6 @@
 // mod memtable
 
-use crate::{Entry, entry};
+use crate::Entry;
 use skiplist::SkipMap;
 
 pub struct MemTable {
